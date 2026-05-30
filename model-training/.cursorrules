@@ -1,0 +1,33 @@
+# model-training — Cursor Operational Rules
+# NHAI Hackathon 7.0 | MobileFaceNet Fine-Tuning Pipeline
+
+## Environment
+- Python 3.10+
+- PyTorch with CUDA (RTX 3060 / 6 GB VRAM — keep batch ≤ 64)
+- Albumentations for all augmentation (never torchvision transforms for train set)
+- All random seeds fixed to 42 unless specified
+
+## Directory Contract
+data/raw/          — original FairFace / IMFDB images (DO NOT modify)
+data/processed/    — 112×112 aligned crops written by a preprocessing script
+checkpoints/       — best_model.pt saved by train.py (spine weights only)
+exports/           — mobilefacenet.onnx + mobilefacenet_int8.tflite
+
+## Coding Standards
+1. All dataset paths come from a single CONFIG dict at the top of each file.
+2. Every function must have a one-line docstring.
+3. No hardcoded magic numbers — define as named constants.
+4. CUDA device selection: `device = torch.device("cuda" if torch.cuda.is_available() else "cpu")`
+5. Mixed precision training with `torch.cuda.amp.GradScaler` to fit in 6 GB VRAM.
+6. Model checkpoints save ONLY the feature extraction spine (no ArcFace head).
+7. TFLite target: ≤ 4.5 MB after INT8 quantization.
+
+## Key Hyperparameters (do not change without reason)
+INPUT_SIZE     = (112, 112)
+EMBEDDING_DIM  = 128
+ARCFACE_MARGIN = 0.5       # m
+ARCFACE_SCALE  = 64.0      # s
+LR             = 1e-3
+BATCH_SIZE     = 32        # safe for 6 GB VRAM
+EPOCHS         = 30
+TAR_FAR_THRESH = 1e-3      # FAR threshold for verification metric

@@ -1,0 +1,29 @@
+# Export + pre-trained model environment — requires Python 3.10 or 3.11 (NOT 3.14)
+# Setup:
+#   conda create -n nhai-export python=3.11 -y
+#   conda activate nhai-export
+#   pip install -r requirements-export.txt
+
+# InsightFace pre-trained model downloader
+insightface>=0.7.3
+
+# ONNX tools
+onnx>=1.16.0
+onnxruntime>=1.18.0
+onnxruntime-tools>=1.7.0
+
+# ONNX → TFLite converter (Windows-compatible, no TF install needed for conversion)
+onnx2tf>=1.26.0
+sng4onnx>=1.0.4
+onnx-simplifier>=0.4.36
+simple-onnx-processing-tools>=1.0.0
+h5py>=3.11.0
+flatbuffers>=24.3.7
+
+# tflite-runtime: not available on Windows via pip.
+# The sanity_check_tflite step will be skipped automatically on Windows.
+# To verify the .tflite on device, sideload it into the Android app directly.
+
+# Numpy pinned for compatibility
+numpy>=1.26.0,<2.0.0
+Pillow>=10.3.0

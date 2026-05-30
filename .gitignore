@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Android / iOS build
+**/android/app/build/
+**/android/build/
+**/.gradle/
+**/.cxx/
+**/.kotlin/
+android/local.properties
+*.apk
+*.aab
+*.ipa
+
+# Submission artifacts (generated outside this repo)
+*.pdf
+*.pptx
+
+# Dataset (not in repo — see README)
+model-training/data/
+
+# Large training artifacts (regenerate via export_finetuned.py)
+*.npz
+*.onnx
+*.onnx.data
+model-training/exports/
+model-training/calibration_image_sample_data_*.npy
+model-training/train_log.txt
+model-training/train_err.txt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Nested git (use monorepo at NHAI root only)
+DatalakeAttendance/.git/

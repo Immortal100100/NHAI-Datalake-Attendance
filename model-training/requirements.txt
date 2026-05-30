@@ -1,0 +1,35 @@
+# ── Python version note ─────────────────────────────────────────────────────
+# Training (dataset.py, model.py, train.py): works on Python 3.10 – 3.14 ✓
+#   All packages below are confirmed available on Python 3.14 + CUDA 12.8.
+#
+# Export step — TFLite conversion (export.py --step tflite):
+#   Requires Python 3.11 (onnx2tf does not yet support 3.14).
+#   conda create -n nhai-export python=3.11 -y
+#   conda activate nhai-export
+#   pip install -r requirements-export.txt
+# ────────────────────────────────────────────────────────────────────────────
+
+# Core deep learning
+torch>=2.11.0
+torchvision>=0.26.0
+
+# Augmentation
+albumentations>=1.4.0
+opencv-python>=4.9.0
+
+# Model utilities
+timm>=0.9.0
+
+# ONNX export + INT8 quantization  (no TensorFlow needed here)
+onnx>=1.16.0
+onnxruntime>=1.18.0
+onnxruntime-tools>=1.7.0
+onnxsim>=0.4.36; python_version < "3.14"
+
+# Data / utilities
+numpy>=1.26.0
+pandas>=2.2.0
+scikit-learn>=1.4.0
+tqdm>=4.66.0
+matplotlib>=3.8.0
+Pillow>=10.3.0

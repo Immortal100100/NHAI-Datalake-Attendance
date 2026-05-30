@@ -1,0 +1,48 @@
+# DatalakeAttendance — Cursor Operational Rules
+# NHAI Hackathon 7.0 | Offline Face Auth | React Native 0.85
+
+## Project Context
+Offline-first mobile attendance system for NHAI field personnel. Fully offline
+facial recognition + liveness detection. Targets Android 8.0+ / iOS 12+.
+Total AI model footprint must stay ≤ 20 MB.
+
+## Technology Stack
+- Framework : React Native 0.85 (TypeScript)
+- Camera     : react-native-vision-camera v4 + JSI Frame Processors
+- AI Models  : MediaPipe Face Mesh TFLite (~3.2 MB) + MobileFaceNet INT8 (2.02 MB ✓ exported)
+- Storage    : react-native-mmkv (AES-256 encrypted)
+- Navigation : @react-navigation/bottom-tabs
+- Network    : @react-native-community/netinfo
+- Location   : react-native-geolocation-service
+
+## Directory Layout (DO NOT change without reason)
+src/
+  components/   — Shared UI (CameraOverlay reticle etc.)
+  db/           — mmkv.ts: SINGLE source for all encrypted storage & interfaces
+  native/       — FaceProcessor.ts: JS bridge to native frame processor plugin
+  screens/      — RegisterScreen, CheckInScreen, AdminSyncScreen
+  utils/        — faceMath.ts (EAR/MAR/cosine), locationManager.ts
+  App.tsx       — Tab navigator root
+App.tsx         — SafeAreaProvider wrapper + StatusBar
+
+## Coding Rules
+1. All storage reads/writes MUST go through src/db/mmkv.ts.
+2. Never store face vectors in plain text; always use the encrypted MMKV instance.
+3. Frame Processors run on the native thread — keep JS callbacks minimal.
+4. All async operations must be wrapped in try/catch.
+5. Use TypeScript strict mode; no `any` types unless absolutely unavoidable.
+6. Keep every file under 300 lines; split if larger.
+7. Do not add third-party packages that require paid licenses.
+8. Model files (.tflite) live in android/app/src/main/assets/ and ios/DatalakeAttendance/.
+9. UI colour palette: bg #0f172a, surface #1e293b, accent #3b82f6, text #f8fafc.
+10. All liveness thresholds (EAR < 0.25 for blink, MAR > 0.6 for smile) are defined
+    only in src/utils/faceMath.ts — do not hardcode elsewhere.
+
+## Phase Checklist
+- [x] Phase 1 — Project setup, MMKV DB, screens, navigation
+- [x] Phase 2 — Vision Camera + Frame Processor plugin skeleton
+- [ ] Phase 3 — MediaPipe TFLite integration → landmark output
+- [ ] Phase 4 — MobileFaceNet enrollment → store vector in MMKV
+- [ ] Phase 5 — Liveness (EAR/MAR) + cosine similarity check-in
+- [x] Phase 6 — Offline geolocation with 4s timeout / 60s cache
+- [x] Phase 7 — AdminSyncScreen: NetInfo → POST → purge on 200 OK

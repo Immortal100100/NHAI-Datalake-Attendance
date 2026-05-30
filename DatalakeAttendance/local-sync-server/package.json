@@ -1,0 +1,10 @@
+{
+  "name": "datalake-local-sync-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local HTTP server to test Phase 7 attendance sync before AWS",
+  "scripts": {
+    "start": "node server.js",
+    "url": "node print-lan-url.js"
+  }
+}
