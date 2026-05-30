@@ -1,301 +1,361 @@
-# NHAI Hackathon — Datalake Attendance
+# NHAI Hackathon 7.0 — Datalake Attendance
 
-Offline-first React Native attendance for NHAI field teams: on-device face enrolment, liveness check-in, encrypted storage, GPS tagging, and batch cloud sync.
+Offline-first mobile attendance for NHAI field teams: on-device face recognition, liveness check-in, encrypted local storage, GPS tagging, and batch cloud sync when connectivity returns.
 
-| Deliverable | Path |
-|-------------|------|
-| **Release APK** | Build → `DatalakeAttendance/android/app/build/outputs/apk/release/app-release.apk` |
-| **On-device model** | `DatalakeAttendance/android/app/src/main/assets/mobilefacenet_int8.tflite` |
-
-**Platform:** Android built and tested on device. **iOS:** Swift scaffold only — not built or device-tested.
+**Repository:** [github.com/Immortal100100/NHAI-Datalake-Attendance](https://github.com/Immortal100100/NHAI-Datalake-Attendance)
 
 ---
 
-## Problem statement
+## What is in this repository
+
+| Included | Description |
+|----------|-------------|
+| **Source code** | React Native app (`DatalakeAttendance/`) + model training pipeline (`model-training/`) |
+| **Deployed model weights** | `mobilefacenet_int8.tflite`, `face_landmarker.task` under `android/app/src/main/assets/` |
+| **Fine-tuned checkpoint** | `model-training/checkpoints/finetuned_head.pt` |
+| **Documentation** | This README only |
+
+| Not included (by design) | Where to find it |
+|-------------------------|-----------------|
+| **Release APK** | Submitted separately to the hackathon portal — not stored in git (build locally; see [Building the app](#building-the-app)) |
+| **Slide deck / PDF report** | Submitted separately — not in this repo |
+| **Training dataset** | ~19 GB — download and prepare locally (see [Training data](#training-data-not-in-repo)) |
+| **`node_modules` / Gradle build output** | Regenerated after clone (`npm install`, `gradlew`) |
+
+---
+
+## Highlights
+
+- Fully **offline** enrolment and check-in; sync runs when network is available  
+- On-device AI: **~10.4 MB** combined (face landmarker + fine-tuned MobileFaceNet FP16 TFLite)  
+- **128-D** face embeddings, cosine matching, L2 normalization in native Kotlin  
+- **Liveness:** head-movement gate over 5 frames (EAR/MAR landmarks extensible)  
+- **Storage:** MMKV with AES-256 encryption  
+- **GPS** on each check-in (4 s timeout, 60 s cache fallback)  
+- **Sync:** JSON batch POST; demo endpoint on webhook.site (swap for API Gateway in production)
+
+**Platforms:** Android 8.0+ built and tested on device. **iOS 12+:** React Native UI + Swift module scaffold present; release build and on-device testing **not** completed for this submission.
+
+---
+
+## Problem statement (Hackathon 7.0)
 
 > How can we accurately and securely authenticate field personnel using facial recognition and liveness detection on standard mid-range mobile devices without any active internet connection, while ensuring the AI model remains lightweight and seamlessly integrates with a React Native application on both Android and iOS devices?
 
-| Constraint | Requirement | Achieved |
-|------------|-------------|----------|
-| Framework | React Native (Android + iOS) | RN 0.85; Android verified |
-| Model size | ~20 MB | **~10.4 MB** on device |
+| Constraint | Requirement | This project |
+|------------|-------------|--------------|
+| Framework | React Native (Android + iOS) | RN 0.85 · TypeScript |
+| Model size | ~20 MB (smaller is better) | **~10.4 MB** on device |
 | Speed | < 1 s recognition | **~100–500 ms** per inference; ~2–5 s full check-in (5-frame liveness) |
-| Accuracy | > 95% | **80.6% TAR@FAR=1%** — improvable with NHAI dataset + GPUs |
-| Liveness | Blink / smile / head turn | **Head-turn active**; EAR/MAR ready |
-| Sync + purge | AWS when online | Batch POST + purge on HTTP 2xx (verified) |
+| Accuracy | > 95% | **80.6% TAR@FAR=1%** — see [Accuracy](#accuracy) |
+| Liveness | Blink / smile / head turn | Head-turn **active**; EAR/MAR ready |
+| Sync + purge | AWS when online | Batch POST + purge on HTTP 2xx |
 
 ---
 
-## Repository layout
+## Repository structure
 
 ```
-NHAI/
-├── README.md                    ← this file (only documentation)
-├── hackathon_doc7.pdf           ← technical report
-├── DatalakeAttendance/          ← React Native app
-│   ├── src/screens/             Register, CheckIn, AdminSync
-│   ├── src/native/FaceProcessor.ts
-│   ├── src/db/mmkv.ts
-│   ├── src/config/syncConfig.ts
-│   └── android/.../faceprocessor/FaceAnalyzerModule.kt
-└── model-training/              ← fine-tune + export pipeline
-    ├── src/                     align, finetune, export scripts
-    └── checkpoints/finetuned_head.pt
+NHAI-Datalake-Attendance/
+├── README.md
+├── DatalakeAttendance/                 # React Native 0.85 app
+│   ├── src/
+│   │   ├── screens/                    # Register, CheckIn, AdminSync
+│   │   ├── native/FaceProcessor.ts     # thresholds, matching, liveness
+│   │   ├── db/mmkv.ts                  # encrypted profiles + attendance
+│   │   ├── config/syncConfig.ts        # sync URL & API key
+│   │   ├── utils/attendanceSync.ts
+│   │   └── components/SyncBootstrap.tsx
+│   ├── android/app/src/main/
+│   │   ├── assets/                     # bundled TFLite models
+│   │   └── java/.../faceprocessor/     # FaceAnalyzerModule.kt
+│   ├── ios/                            # scaffold (not device-tested)
+│   └── local-sync-server/              # optional LAN test server
+└── model-training/
+    ├── src/                            # align, finetune, export scripts
+    ├── checkpoints/finetuned_head.pt
+    └── requirements.txt
 ```
-
-**Dataset is not in the repo** (~19 GB). Delete locally with the command in [Dataset](#dataset-not-in-repo) below.
 
 ---
 
-## Solution overview
+## How it works
 
-1. **Offline enrolment** — capture face → 128-D embedding → MMKV AES-256  
-2. **Liveness check-in** — head-turn over 5 frames → cosine match (≥ 0.45) → GPS-tagged record  
-3. **Encrypted storage** — profiles + attendance queue on device  
-4. **Auto sync** — NetInfo → batch POST → mark synced → purge on HTTP 2xx  
+### 1. Offline enrolment
 
----
+User enters name and employee code → camera captures frames → native module outputs 128-D embedding → averaged and stored in encrypted MMKV.
 
-## Architecture
+### 2. Liveness check-in
+
+Five frames captured → `evaluateLiveness()` requires head movement → cosine match against gallery (threshold **0.45**, top1–top2 margin **0.08**) → attendance record with GPS saved locally (`synced: false`).
+
+### 3. Auto sync and purge
+
+`SyncBootstrap` listens for connectivity → unsynced records batched as JSON → `POST` to configured endpoint → on HTTP **2xx**, records marked synced and purged from device.
+
+### Architecture
 
 ```
-Camera → MediaPipe Face Mesh (~3.2 MB) → landmarks + face box
-      → MobileFaceNet FP16 (~7.2 MB) → 128-D → L2 norm (Kotlin)
-      → evaluateLiveness() → matchAgainstGallery() → MMKV record
+Camera (Vision Camera)
+    → face_landmarker.task + mobilefacenet_int8.tflite (Kotlin)
+    → evaluateLiveness() → matchAgainstGallery()
+    → MMKV (profiles + attendance queue)
 
-When online: SyncBootstrap → POST JSON → AWS / webhook → purge
+When online → attendanceSync.ts → POST → cloud endpoint → purge
 ```
 
-| Layer | Path |
-|-------|------|
+| Component | Location |
+|-----------|----------|
 | UI | `DatalakeAttendance/src/screens/` |
-| Face logic | `src/native/FaceProcessor.ts` |
-| Storage | `src/db/mmkv.ts` (AES-256) |
-| Sync | `src/utils/attendanceSync.ts` |
-| Auto-sync | `src/components/SyncBootstrap.tsx` |
-| Native | `android/.../FaceAnalyzerModule.kt` |
-
-**Assets:** `android/app/src/main/assets/mobilefacenet_int8.tflite` (7.2 MB)
+| Face / match / liveness | `DatalakeAttendance/src/native/FaceProcessor.ts` |
+| Encrypted storage | `DatalakeAttendance/src/db/mmkv.ts` |
+| Sync | `DatalakeAttendance/src/utils/attendanceSync.ts` |
+| Native inference | `DatalakeAttendance/android/app/src/main/java/.../FaceAnalyzerModule.kt` |
 
 ---
 
-## AI model
+## On-device models (in repo)
 
-| Property | Value |
-|----------|-------|
-| Backbone | InsightFace `w600k_mbf` (frozen) |
-| Head | ArcFace MLP 512→256→128 |
-| TAR@FAR=1% | **80.6%** (epoch 45, `all_indian` held-out) |
-| Threshold | cosine ≥ **0.45** |
-| Liveness frames | **5** (`VERIFICATION_WINDOW_FRAMES`) |
+| Asset | Path | Size (approx.) |
+|-------|------|----------------|
+| Recognition | `DatalakeAttendance/android/app/src/main/assets/mobilefacenet_int8.tflite` | ~7.2 MB |
+| Face mesh | `DatalakeAttendance/android/app/src/main/assets/face_landmarker.task` | ~0.8 MB |
 
-**Accuracy note:** Below the 95% PS target because training used ~41k images / 362 IDs on one consumer GPU with a frozen backbone. Same export pipeline scales with NHAI data + multi-GPU — no app rewrite.
-
-### Retrain & export
-
-```powershell
-cd model-training
-$env:PYTHONUTF8 = "1"
-
-# After placing dataset under data/all_indian/ (see Dataset section)
-python -u src/align_and_precompute.py `
-  --manifest_path data/all_indian/manifest.csv `
-  --processed_dir data/all_indian `
-  --cache_path data/all_indian/embed_cache_aligned.npz `
-  --n_aug 10
-
-python -u src/finetune.py --embed_cache data/all_indian/embed_cache_aligned.npz --epochs 60 --lr 5e-2
-
-python src/export_finetuned.py --step fuse --backbone exports/w600k_mbf.onnx
-python src/export_finetuned.py --step quantize
-conda run -n nhai-export python src/export_finetuned.py --step tflite
-python src/export_finetuned.py --step deploy
-# Rebuild APK
-```
+L2 normalization runs in Kotlin after TFLite inference (not inside the graph).
 
 ---
 
-## Dataset (not in repo)
+## Accuracy
 
-Training data (`all_indian`, ~41k images, 362 identities) is **excluded from git**. To remove it locally, run:
+| Metric | Value |
+|--------|-------|
+| **TAR @ FAR = 1%** | **80.6%** (best reproducible run, held-out validation) |
+| Training corpus | ~41k images, 362 identities (`all_indian` — not in repo) |
+| PS target | 95% |
 
-```powershell
-# Delete entire dataset folder (~19 GB) — run from any terminal
-cmd /c "rmdir /s /q \"C:\Users\kunal\Desktop\NHAI\model-training\data\""
-```
-
-Or delete in stages (if the full delete hangs):
-
-```powershell
-cmd /c "rmdir /s /q \"C:\Users\kunal\Desktop\NHAI\model-training\data\downloads\""
-cmd /c "rmdir /s /q \"C:\Users\kunal\Desktop\NHAI\model-training\data\all_indian\""
-cmd /c "rmdir /s /q \"C:\Users\kunal\Desktop\NHAI\model-training\data\""
-```
-
-**To re-download for training:** IMFDB (IIIT Hyderabad), Kaggle Bollywood, or custom folders under `model-training/data/raw/`. Minimum 5+ images per identity. Use `src/dataset_indian.py` and `src/build_all_indian_manifest.py`.
+Validation is below the problem-statement target because training used a limited public corpus on a single GPU with a frozen backbone. The same export pipeline can scale with a larger NHAI-provided dataset and multi-GPU training without changing the app architecture.
 
 ---
 
 ## Liveness detection
 
-| Method | Status | Detail |
-|--------|--------|--------|
-| **Head turn** | Active | `evaluateLiveness()` — face box X/Y/width range over 5 frames; threshold 0.06 X-range or 0.08 total movement |
-| **EAR blink** | Ready | MediaPipe eye landmarks; EAR < 0.25 in `faceMath.ts` |
-| **MAR smile** | Ready | Mouth landmarks; MAR > 0.6 |
+| Method | Status | Implementation |
+|--------|--------|----------------|
+| **Head turn** | Active | `evaluateLiveness()` in `FaceProcessor.ts` — face box motion over 5 frames |
+| **Blink (EAR)** | Extensible | Landmarks in native module; threshold in `faceMath.ts` |
+| **Smile (MAR)** | Extensible | Mouth landmarks; enable via config |
 
-Photos/screens fail because the face box stays rigid across frames.
+Rigid photos or screens fail the motion gate.
 
 ---
 
-## Sync API
+## Cloud sync
 
-**Config:** `DatalakeAttendance/src/config/syncConfig.ts`
+Configuration: [`DatalakeAttendance/src/config/syncConfig.ts`](DatalakeAttendance/src/config/syncConfig.ts)
 
 | Setting | Demo value |
 |---------|------------|
 | `AWS_SYNC_URL` | `https://webhook.site/5678eed5-7875-466a-a724-dd3761243de4` |
-| `timeoutMs` | 15000 |
-| View inbox | https://webhook.site/#!/5678eed5-7875-466a-a724-dd3761243de4 |
+| `timeoutMs` | `15000` |
+| Demo inbox | [webhook.site/#!/5678eed5-7875-466a-a724-dd3761243de4](https://webhook.site/#!/5678eed5-7875-466a-a724-dd3761243de4) |
 
-**POST body (metadata only — no face embeddings):**
+**Payload** uploads attendance metadata only (no face embeddings):
 
 ```json
 {
   "records": [{
-    "id": "...", "userId": "...", "employeeCode": "NHAI-001",
-    "name": "...", "checkInTime": 1717061234567,
-    "latitude": 28.6139, "longitude": 77.2090,
-    "livenessPassed": true, "similarityScore": 0.583
+    "id": "uuid",
+    "userId": "profile-id",
+    "employeeCode": "NHAI-001",
+    "name": "Field Worker",
+    "checkInTime": 1717061234567,
+    "latitude": 28.6139,
+    "longitude": 77.2090,
+    "locationAccuracy": 12.5,
+    "livenessPassed": true,
+    "similarityScore": 0.583
   }],
   "syncedAt": "2026-05-30T06:00:00.000Z",
   "source": "datalake-attendance-mobile"
 }
 ```
 
-On HTTP **2xx**: `markRecordsSynced()` → `purgeSyncedRecords()`.
-
-**Verified demo:** `livenessPassed: true`, `similarityScore: 0.583`, GPS ~27.87°N 78.08°E (webhook.site POST).
-
-**Production:** Replace URL with API Gateway; set `SYNC_CONFIG.apiKey` Bearer token.
+For production: set `AWS_SYNC_URL` to your API Gateway URL and `SYNC_CONFIG.apiKey` to a Bearer token, then rebuild the APK.
 
 ---
 
-## Build & deploy
+## Getting started (clone and run)
 
 ### Prerequisites
 
-Node 18+, Android SDK API 26+, JDK 17, USB/wireless ADB.
+- **Node.js** 18+
+- **JDK** 17
+- **Android SDK** API 26+
+- **Android device or emulator** with camera (physical device recommended for demo)
 
-### Release APK
+### 1. Clone
 
-```powershell
-cd DatalakeAttendance
+```bash
+git clone https://github.com/Immortal100100/NHAI-Datalake-Attendance.git
+cd NHAI-Datalake-Attendance/DatalakeAttendance
 npm install
-
-cd android
-.\gradlew assembleRelease
-
-$adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
-& $adb install -r app\build\outputs\apk\release\app-release.apk
 ```
 
-### Sync endpoint options
+### 2. Run debug build (development)
+
+```bash
+npm start
+# separate terminal:
+npm run android
+```
+
+### 3. Build release APK (for device install)
+
+The **release APK is not committed** to this repository. Build it locally:
+
+```bash
+cd android
+./gradlew assembleRelease
+```
+
+**Output (local only, not in git):**
+
+`android/app/build/outputs/apk/release/app-release.apk`
+
+Install on a connected device:
+
+```bash
+adb install -r android/app/build/outputs/apk/release/app-release.apk
+```
+
+Submit the APK file separately per hackathon instructions.
+
+---
+
+## Optional: local sync test server
+
+```bash
+cd DatalakeAttendance/local-sync-server
+npm install
+npm start
+```
+
+Set in `syncConfig.ts`:
 
 ```typescript
-// syncConfig.ts — Option A: demo webhook (current)
-export const USE_LOCAL_SYNC_SERVER = false;
-export const AWS_SYNC_URL = 'https://webhook.site/<uuid>';
-
-// Option B: LAN test server
-cd local-sync-server && npm start
 export const USE_LOCAL_SYNC_SERVER = true;
-export const LOCAL_SYNC_HOST = 'http://192.168.x.x:8787/attendance';
-
-// Option C: production
-export const AWS_SYNC_URL = 'https://<api-id>.execute-api.<region>.amazonaws.com/prod/attendance';
+export const LOCAL_SYNC_HOST = 'http://<your-lan-ip>:8787/attendance';
 ```
 
-Rebuild APK after changing config.
+Rebuild the APK after changing sync settings.
 
 ---
 
-## Demo script (~5 min)
+## Training pipeline (optional)
 
-1. **Enrol** — Register tab → name + employee code → capture face (offline)  
-2. **Check-in** — Head turn → green match with similarity score  
-3. **Negative test** — Different person → no match  
-4. **Offline** — Airplane mode → check-in still works → pending count rises  
-5. **Sync** — Online → Sync tab → show webhook JSON POST  
+Requires Python 3.10+, CUDA GPU recommended, and a prepared dataset under `model-training/data/` (not in repo).
 
-**Talking points:** Offline AI (~10 MB), 80.6% TAR (scalable), encrypted MMKV, batch sync with purge.
+```bash
+cd model-training
+pip install -r requirements.txt
+
+# 1. Prepare embeddings (after dataset + manifest exist)
+python -u src/align_and_precompute.py \
+  --manifest_path data/all_indian/manifest.csv \
+  --processed_dir data/all_indian \
+  --cache_path data/all_indian/embed_cache_aligned.npz \
+  --n_aug 10
+
+# 2. Fine-tune projection head
+python -u src/finetune.py \
+  --embed_cache data/all_indian/embed_cache_aligned.npz \
+  --epochs 60 --lr 5e-2
+
+# 3. Export and deploy to app assets
+python src/export_finetuned.py --step fuse --backbone exports/w600k_mbf.onnx
+python src/export_finetuned.py --step quantize
+# TFLite step needs conda env from requirements-export.txt
+python src/export_finetuned.py --step tflite
+python src/export_finetuned.py --step deploy
+```
+
+Then rebuild the Android app. Large ONNX export artifacts are gitignored under `model-training/exports/`.
 
 ---
 
-## Datalake 3.0 integration
+## Training data (not in repo)
+
+Training images are **not** versioned (multi-gigabyte). To train from scratch:
+
+1. Obtain Indian face data (e.g. IMFDB, Kaggle Bollywood, or custom identity folders).  
+2. Place under `model-training/data/` and build a manifest (`src/build_all_indian_manifest.py`, `src/dataset_indian.py`).  
+3. Minimum **5+ images per identity** recommended.
+
+IMFDB requires academic registration: [cvit.iiit.ac.in/projects/IMFDB](http://cvit.iiit.ac.in/projects/IMFDB/).
+
+---
+
+## Integrating into Datalake 3.0
 
 | Step | Action |
 |------|--------|
-| 1 | Copy `DatalakeAttendance/src/` → host `src/features/attendance/` |
-| 2 | Copy `android/.../faceprocessor/` + TFLite assets |
+| 1 | Copy `DatalakeAttendance/src/` into the host app (e.g. `src/features/attendance/`) |
+| 2 | Copy `android/.../faceprocessor/` and asset files into the host Android project |
 | 3 | Register `FaceAnalyzerPackage` in `MainApplication.kt` |
-| 4 | Add npm deps: vision-camera, mmkv, netinfo, geolocation |
+| 4 | Add dependencies from `DatalakeAttendance/package.json` |
 | 5 | Set production `AWS_SYNC_URL` in `syncConfig.ts` |
-| 6 | Mount `<SyncBootstrap />` at app root |
+| 6 | Mount `<SyncBootstrap />` at the app root |
 
 ---
 
-## Evaluation criteria (100 marks)
+## Hackathon submission mapping
 
-| Criterion | Marks | Evidence |
-|-----------|------:|----------|
-| Innovation | 30 | ~10.4 MB edge AI, compression pipeline, offline liveness |
-| Feasibility | 30 | RN 0.85 integration, <1 s inference class, Android device test |
-| Scalability | 20 | Sync/purge verified, Indian fine-tune, accuracy scale path |
-| Presentation | 20 | PPT, PDF report, this README, source code |
+| Deliverable | Provided via |
+|-------------|--------------|
+| Source code | **This GitHub repository** |
+| Working Android prototype (APK) | **Separate upload** — build with `gradlew assembleRelease` |
+| Presentation / technical PDF | **Separate upload** — not in repo |
+| Offline liveness | Head-turn gate in `FaceProcessor.ts` |
+| AWS sync + purge | `attendanceSync.ts` + demo webhook POST |
+| Open-source stack | React Native, TFLite, InsightFace, MediaPipe, MMKV, etc. |
+| Model ≤ 20 MB | ~10.4 MB bundled assets |
 
----
+### Evaluation criteria (100 marks)
 
-## Deliverables checklist
-
-| Item | Status | Location |
-|------|--------|----------|
-| Source code | Done | This repo |
-| Android APK | Done | Build from `android/` |
-| iOS | Partial | Scaffold only |
-| Offline liveness | Done | Head-turn gate |
-| AWS sync + purge | Done | webhook proof screenshot |
-| Open-source only | Done | MIT/Apache stack |
-| Model ≤ 20 MB | Done | ~10.4 MB |
+| Criterion | Marks | Evidence in repo |
+|-----------|------:|------------------|
+| Innovation | 30 | Edge TFLite stack, compression pipeline, offline liveness |
+| Feasibility | 30 | RN integration, mid-range device testing, <1 s inference class |
+| Scalability | 20 | Sync/purge flow, Indian-domain fine-tune, accuracy improvement path |
+| Presentation | 20 | README + source clarity; deck/PDF submitted separately |
 
 ---
 
-## Clean repo before git push
+## Demo flow (~5 minutes)
 
-```powershell
-# Dataset (you run this)
-cmd /c "rmdir /s /q \"C:\Users\kunal\Desktop\NHAI\model-training\data\""
-
-# Build artifacts & dependencies (regenerate with npm install / gradlew)
-cmd /c "rmdir /s /q \"C:\Users\kunal\Desktop\NHAI\DatalakeAttendance\node_modules\""
-cmd /c "rmdir /s /q \"C:\Users\kunal\Desktop\NHAI\DatalakeAttendance\android\app\build\""
-```
+1. **Enrol** — Register tab → name + employee code → capture face (offline).  
+2. **Check-in** — Slow head turn → match with similarity score.  
+3. **Negative test** — Different person → rejected.  
+4. **Offline** — Airplane mode → check-in still succeeds; pending count increases.  
+5. **Sync** — Restore network → Sync tab or auto-sync → verify JSON at webhook inbox.
 
 ---
 
 ## Known limitations
 
-- **80.6% TAR** below 95% PS target — needs larger NHAI dataset + multi-GPU  
-- **iOS** not built or tested  
-- **webhook.site** is demo-only — replace for production  
-- **5-frame check-in** ~2–5 s by design (liveness requirement)
+- **80.6% TAR@FAR=1%** below the 95% PS benchmark — improvable with NHAI-scale data and GPUs.  
+- **iOS** not built or tested on device for this submission.  
+- **webhook.site** is for demo only; use API Gateway + auth in production.  
+- **Check-in UX** uses 5 frames (~2–5 s) to satisfy liveness requirements by design.
 
 ---
 
 ## Tech stack
 
-React Native 0.85 · Vision Camera v4 · MMKV · NetInfo · Geolocation · Kotlin TFLite · PyTorch · InsightFace · ArcFace · ONNX · onnx2tf
+React Native 0.85 · TypeScript · Vision Camera · react-native-mmkv · NetInfo · Geolocation · Kotlin · TensorFlow Lite · PyTorch · InsightFace · ArcFace · ONNX · onnx2tf
 
-## License
+---
 
-Open-source components only (MIT / Apache 2.0). IMFDB requires academic registration for dataset download.
+## License and data
+
+Application code and training scripts in this repository use open-source dependencies (MIT / Apache 2.0). Third-party training datasets (e.g. IMFDB) may require separate registration or licenses from their providers.
